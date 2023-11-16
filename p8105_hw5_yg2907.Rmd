@@ -1,0 +1,238 @@
+---
+title: "Homework 5"
+author: "Yuandi Gao"
+date: "11.15.2023"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(p8105.datasets)
+library(viridis)
+
+knitr::opts_chunk$set(
+	echo = TRUE,
+	warning = FALSE,
+	fig.width = 8, 
+  fig.height = 6,
+  out.width = "90%"
+)
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+```
+
+```{r load_libraries}
+library(tidyverse)
+```
+
+### Problem 1
+For this question, we will be using the raw data gathered by the Washington Post on homicides in 50 large U.S. cities, the steps below clean and import the data. 
+
+```{r}
+homicide_df = 
+  read_csv("data1/homicide-data.csv", na = c("", "NA", "Unknown")) %>%
+  mutate(
+    city_state = str_c(city, state, sep = ", "),
+    resolution = case_when(
+      disposition == "Closed without arrest" ~ "unsolved",
+      disposition == "Open/No arrest"        ~ "unsolved",
+      disposition == "Closed by arrest"      ~ "solved"
+    )
+  ) %>% 
+  filter(city_state != "Tulsa, AL") 
+```
+```{r}
+city_homicide_df = 
+  homicide_df %>% 
+  select(city_state, disposition, resolution) %>% 
+  group_by(city_state) %>% 
+  summarize(
+    hom_total = n(),
+    hom_unsolved = sum(resolution == "unsolved"))
+```
+
+There are `r nrow(homicide_df)` entries, including: victim name, race, age, sex, date of the homicide, and the location . The `city_state` variable was created to includes both city and state, and a `resolution` variable to indicate whether the case was closed by arrest. I then add the cities and summarize for a total number of homicides and the number that are solved.
+
+For the city of Baltimore, MD, use `prop.test` and `broom::tidy` functions to obtain an estimate and CI of the proportion of unsolved homicides in that city. Then use function in the `purrr` package to obtain estimates and CIs for the proportion of unsolved homicides in each city in the dataset. 
+
+```{r}
+bmore_test = 
+  prop.test(
+    x = filter(city_homicide_df, city_state == "Baltimore, MD") %>% pull(hom_unsolved),
+    n = filter(city_homicide_df, city_state == "Baltimore, MD") %>% pull(hom_total)) 
+
+broom::tidy(bmore_test) %>% 
+  knitr::kable(digits = 3)
+```
+```{r}
+test_results = 
+  city_homicide_df %>% 
+  mutate(
+    prop_tests = map2(hom_unsolved, hom_total, \(x, y) prop.test(x = x, n = y)),
+    tidy_tests = map(prop_tests, broom::tidy)) %>% 
+  select(-prop_tests) %>% 
+  unnest(tidy_tests) %>% 
+  select(city_state, estimate, conf.low, conf.high) %>% 
+  mutate(city_state = fct_reorder(city_state, estimate))
+```
+
+The plot below shows the estimates and the CI of the proportion of unsolved homicides in each city.
+
+```{r}
+test_results %>% 
+  mutate(city_state = fct_reorder(city_state, estimate)) %>% 
+  ggplot(aes(x = city_state, y = estimate)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+According to the figure, there is a very wide range in the rate at which homicides are solved. Within all cities, Chicago is noticeably high. 
+
+### Problem 2
+Create a tidy dataframe containing data from all participants, including the subject ID, arm, and observations over time:
+Start with a dataframe containing all file names; the list.files function will help
+
+```{r, echo=FALSE}
+library(tidyverse)
+library(rvest)
+library(purrr)
+library(dplyr)
+library(broom)
+library(ggplot2)
+```
+
+Tidy the result
+
+```{r message = FALSE, warning= FALSE}
+comb_df = 
+  tibble(
+    files = list.files("data/"),
+    path = str_c("data/", files)
+  ) %>% 
+  mutate(data = map(path, read_csv)) %>%
+  unnest()
+```
+```{r}
+tidy_df = comb_df %>% 
+  mutate(
+    files = str_replace(files, ".csv", ""),
+    group = str_sub(files, 1, 3),
+    ID = str_sub(files, 5, 7)) %>%
+  pivot_longer(week_1:week_8,names_to = "week", values_to = "observation",names_prefix = "week_") %>%
+  mutate(week = as.numeric(week)) %>%
+  select(group, ID, week, observation)
+```
+```{r}
+tidy_df
+```
+
+Make a spaghetti plot showing observations on each subject over time, and comment on differences between groups.
+
+```{r}
+ggplot(tidy_df, aes(x = week , y = observation, color = ID)) + 
+  geom_point() + 
+  geom_line() +
+  facet_grid(~group) +
+  labs(x = "Week", y = "Observation", title = 'Observations on each Subject Over Time') 
+```
+
+The experimental group generally has higher values than the control group, and there is a trend of increasing observations among subjects.
+
+### Problem 3
+
+For each dataset, save μ and the p-value arising from a test of H:μ=0 using α=0.05. Repeat for μ={1,2,3,4,5,6}
+
+Loading the samples
+
+```{r}
+set.seed(12345)
+n = 30
+sigma = 5
+alpha = 0.05
+simulations = 5000
+```
+```{r}
+sim_test = function(mu){
+
+  sim_data = tibble(rnorm(n = 30, mean = mu, sd = 5))
+
+  sim_data %>%
+    t.test() %>% 
+    broom::tidy() %>% 
+    select(estimate, p.value)
+}
+
+sim_results = 
+  expand_grid(
+    mu = 0,
+    iter = 1:5000) %>% 
+  mutate(t_test_df = map(mu, sim_test)) %>% 
+  unnest(t_test_df)
+```
+```{r}
+sim_results_2 =
+  expand_grid(
+    mu = 0:6,
+    iter = 1:5000) %>%
+  mutate(t_test_df_2 = map(mu, sim_test)) %>%
+  unnest(t_test_df_2)
+```
+
+This plot shows the proportion of instances where the null hypothesis was rejected on the y-axis, with the true value of μ on the x-axis. As the true value of μ rises, the test's power also increases.
+
+Make a plot showing the proportion of times the null was rejected (the power of the test) on the y axis and the true value of μ on the x axis.
+
+```{r}
+sim_results_2 |> 
+  group_by(mu) |> 
+  summarize(proportion_rejected = sum(p.value < 0.05)/5000) |> 
+  ggplot(aes(x = mu, y = proportion_rejected)) +
+  geom_point() +
+  geom_line() +
+  labs(
+    title = "Power of the Test vs True Value of μ",
+       x = "True μ",
+       y = "Power of the test")
+```
+This plot illustrates the mean estimate of μ-hat on the y-axis against the true value of μ on the x-axis. The second plot, overlaid on the first, shows the mean estimate of μ-hat in samples where the null hypothesis was rejected on the y-axis, with the true value of μ on the x-axis.
+
+Make a plot show the average estimate of μ̂ on the y axis and the true value of μ on the x axis. 
+```{r}
+avg_estimate = 
+  sim_results_2 |> 
+  group_by(mu) |> 
+  summarize(average_estimate = mean(estimate)) |> 
+  ungroup()
+
+avg_rejected_estimate = 
+  sim_results_2 |> 
+  group_by(mu) |> 
+  filter(p.value < 0.05) |> 
+  summarize(average_estimate = mean(estimate)) |> 
+  ungroup()
+```
+
+Make a plot showing the average estimate of μ̂ on the y axis and the true value of μ on the x axis. Make a second plot (or overlay on the first) the average estimate of μ̂ only in samples for which the null was rejected on the y axis and the true value of μ on the x axis.
+
+```{r}
+ggplot() +
+  geom_line(data = avg_estimate, aes(x = mu, y = average_estimate, color = "full estimate")) +
+  geom_line(data = avg_rejected_estimate, aes(x = mu, y = average_estimate, color = "rejected estimate")) +
+  geom_point(data = avg_estimate, aes(x = mu, y = average_estimate, color = "full estimate")) +
+  geom_point(data = avg_rejected_estimate, aes(x = mu, y = average_estimate, color = "rejected estimate")) +
+  scale_color_manual(values = c("full estimate" = "blue", "rejected estimate" = "red")) +
+  labs(
+    title = "All Estimates of μ^ vs Rejected Estimates of μ^",
+       x = "True μ",
+       y = "Average estimate of μ^")
+```
+
+The average estimate of µ is very close to the true value of µ. When the true value of µ is 0,the sample average of μ across tests for which the null is rejected approximately not equal to the true value of μ, but when the true value of µ greater than 1, the sample average of μ across tests for which the null is rejected approximately equal to the true value of μ.
